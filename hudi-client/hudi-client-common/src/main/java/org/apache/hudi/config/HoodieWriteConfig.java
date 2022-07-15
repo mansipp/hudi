@@ -1553,6 +1553,22 @@ public class HoodieWriteConfig extends HoodieConfig {
     return getBooleanOrDefault(HoodieHBaseIndexConfig.UPDATE_PARTITION_PATH_ENABLE);
   }
 
+  public String getDynamoDBTableName() {
+    return getString(HoodieDynamoDBIndexConfig.DYNAMODB_INDEX_TABLE_NAME);
+  }
+
+  public String getDynamoDBBillingMode() {
+    return getString(HoodieDynamoDBIndexConfig.DYNAMODB_INDEX_BILLING_MODE);
+  }
+
+  public String getDynamoDBIndexReadCapacity() {
+    return getString(HoodieDynamoDBIndexConfig.DYNAMODB_INDEX_READ_CAPACITY);
+  }
+
+  public boolean getDynamoDBIndexUpdatePartitionPath() {
+    return getBooleanOrDefault(HoodieDynamoDBIndexConfig.DYNAMODB_INDEX_UPDATE_PARTITION_PATH_ENABLE);
+  }
+
   public int getHBaseIndexRegionCount() {
     return getInt(HoodieHBaseIndexConfig.BUCKET_NUMBER);
   }

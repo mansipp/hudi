@@ -31,7 +31,6 @@ import org.apache.hudi.index.HoodieIndex;
 import org.apache.hudi.keygen.constant.KeyGeneratorOptions;
 
 import javax.annotation.concurrent.Immutable;
-
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
@@ -46,11 +45,13 @@ import static org.apache.hudi.config.HoodieHBaseIndexConfig.ZKPORT;
 import static org.apache.hudi.config.HoodieHBaseIndexConfig.ZKQUORUM;
 import static org.apache.hudi.index.HoodieIndex.IndexType.BLOOM;
 import static org.apache.hudi.index.HoodieIndex.IndexType.BUCKET;
+import static org.apache.hudi.index.HoodieIndex.IndexType.DYNAMODB;
 import static org.apache.hudi.index.HoodieIndex.IndexType.GLOBAL_BLOOM;
 import static org.apache.hudi.index.HoodieIndex.IndexType.GLOBAL_SIMPLE;
 import static org.apache.hudi.index.HoodieIndex.IndexType.HBASE;
 import static org.apache.hudi.index.HoodieIndex.IndexType.INMEMORY;
 import static org.apache.hudi.index.HoodieIndex.IndexType.SIMPLE;
+
 
 /**
  * Indexing related config.
@@ -67,7 +68,7 @@ public class HoodieIndexConfig extends HoodieConfig {
       // Builder#getDefaultIndexType has already set it according to engine type
       .noDefaultValue()
       .withValidValues(HBASE.name(), INMEMORY.name(), BLOOM.name(), GLOBAL_BLOOM.name(),
-          SIMPLE.name(), GLOBAL_SIMPLE.name(), BUCKET.name())
+          SIMPLE.name(), GLOBAL_SIMPLE.name(), BUCKET.name(), DYNAMODB.name())
       .withDocumentation("Type of index to use. Default is Bloom filter. "
           + "Possible options are [BLOOM | GLOBAL_BLOOM |SIMPLE | GLOBAL_SIMPLE | INMEMORY | HBASE | BUCKET]. "
           + "Bloom filters removes the dependency on a external system "
@@ -507,6 +508,11 @@ public class HoodieIndexConfig extends HoodieConfig {
 
     public Builder withHBaseIndexConfig(HoodieHBaseIndexConfig hBaseIndexConfig) {
       hoodieIndexConfig.getProps().putAll(hBaseIndexConfig.getProps());
+      return this;
+    }
+
+    public Builder withDynamoDBIndexConfig(HoodieDynamoDBIndexConfig dynamoDBIndexConfig) {
+      hoodieIndexConfig.getProps().putAll(dynamoDBIndexConfig.getProps());
       return this;
     }
 
