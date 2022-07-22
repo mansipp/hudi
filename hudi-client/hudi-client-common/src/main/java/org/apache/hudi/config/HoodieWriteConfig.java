@@ -1553,11 +1553,11 @@ public class HoodieWriteConfig extends HoodieConfig {
     return getBooleanOrDefault(HoodieHBaseIndexConfig.UPDATE_PARTITION_PATH_ENABLE);
   }
 
-  public String getDynamoDBTableName() {
+  public String getDynamoDBIndexTableName() {
     return getString(HoodieDynamoDBIndexConfig.DYNAMODB_INDEX_TABLE_NAME);
   }
 
-  public String getDynamoDBBillingMode() {
+  public String getDynamoDBIndexBillingMode() {
     return getString(HoodieDynamoDBIndexConfig.DYNAMODB_INDEX_BILLING_MODE);
   }
 

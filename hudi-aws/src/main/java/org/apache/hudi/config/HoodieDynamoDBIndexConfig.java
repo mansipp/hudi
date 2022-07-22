@@ -46,10 +46,16 @@ public class HoodieDynamoDBIndexConfig extends HoodieConfig {
 
   public static final ConfigProperty<String> DYNAMODB_INDEX_PARTITION_KEY = ConfigProperty
       .key(DYNAMODB_BASED_INDEX_PROPERTY_PREFIX + "partition_key")
-      .noDefaultValue()
+      .defaultValue("recordKey")
       .sinceVersion("0.12.1")
       .withDocumentation("For DynamoDB based indexing, the partition key for the DynamoDB base table. "
           + "Each Hudi dataset should have it's unique key for Hudi global indexing.");
+
+  public static final ConfigProperty<String> DYNAMODB_INDEX_SORT_KEY = ConfigProperty
+      .key(DYNAMODB_BASED_INDEX_PROPERTY_PREFIX + "sort_key")
+      .noDefaultValue()
+      .sinceVersion("0.12.1")
+      .withDocumentation("For DynamoDB based indexing, the sort key for the DynamoDB base table. ");
 
   public static final ConfigProperty<String> DYNAMODB_INDEX_REGION = ConfigProperty
       .key(DYNAMODB_BASED_INDEX_PROPERTY_PREFIX + "region")
@@ -129,6 +135,11 @@ public class HoodieDynamoDBIndexConfig extends HoodieConfig {
 
     public HoodieDynamoDBIndexConfig.Builder dynamoDBIndexPartitionKey(String partitionKey) {
       dynamoDBIndexConfig.setValue(DYNAMODB_INDEX_PARTITION_KEY, partitionKey);
+      return this;
+    }
+
+    public HoodieDynamoDBIndexConfig.Builder dynamoDBIndexSortKey(String sortKey) {
+      dynamoDBIndexConfig.setValue(DYNAMODB_INDEX_SORT_KEY, sortKey);
       return this;
     }
 

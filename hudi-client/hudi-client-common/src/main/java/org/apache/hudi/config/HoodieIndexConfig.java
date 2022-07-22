@@ -47,6 +47,7 @@ import static org.apache.hudi.index.HoodieIndex.IndexType.BLOOM;
 import static org.apache.hudi.index.HoodieIndex.IndexType.BUCKET;
 import static org.apache.hudi.index.HoodieIndex.IndexType.DYNAMODB;
 import static org.apache.hudi.index.HoodieIndex.IndexType.GLOBAL_BLOOM;
+import static org.apache.hudi.index.HoodieIndex.IndexType.GLOBAL_DYNAMODB;
 import static org.apache.hudi.index.HoodieIndex.IndexType.GLOBAL_SIMPLE;
 import static org.apache.hudi.index.HoodieIndex.IndexType.HBASE;
 import static org.apache.hudi.index.HoodieIndex.IndexType.INMEMORY;
@@ -67,7 +68,7 @@ public class HoodieIndexConfig extends HoodieConfig {
       // Builder#getDefaultIndexType has already set it according to engine type
       .noDefaultValue()
       .withValidValues(HBASE.name(), INMEMORY.name(), BLOOM.name(), GLOBAL_BLOOM.name(),
-          SIMPLE.name(), GLOBAL_SIMPLE.name(), BUCKET.name(), DYNAMODB.name())
+          SIMPLE.name(), GLOBAL_SIMPLE.name(), BUCKET.name(), DYNAMODB.name(), GLOBAL_DYNAMODB.name())
       .withDocumentation("Type of index to use. Default is Bloom filter. "
           + "Possible options are [BLOOM | GLOBAL_BLOOM |SIMPLE | GLOBAL_SIMPLE | INMEMORY | HBASE | BUCKET]. "
           + "Bloom filters removes the dependency on a external system "
