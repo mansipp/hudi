@@ -44,13 +44,6 @@ public class HoodieDynamoDBIndexConfig extends HoodieConfig {
       .sinceVersion("0.12.1")
       .withDocumentation("For DynamoDB based indexing, DynamoDB table name will be used as an index for Hudi table.");
 
-  public static final ConfigProperty<String> DYNAMODB_INDEX_PARTITION_KEY = ConfigProperty
-      .key(DYNAMODB_BASED_INDEX_PROPERTY_PREFIX + "partition_key")
-      .noDefaultValue()
-      .sinceVersion("0.12.1")
-      .withDocumentation("For DynamoDB based indexing, the partition key for the DynamoDB base table. "
-          + "Each Hudi dataset should have it's unique key for Hudi global indexing.");
-
   public static final ConfigProperty<String> DYNAMODB_INDEX_REGION = ConfigProperty
       .key(DYNAMODB_BASED_INDEX_PROPERTY_PREFIX + "region")
       .defaultValue("us-east-1")
@@ -124,11 +117,6 @@ public class HoodieDynamoDBIndexConfig extends HoodieConfig {
 
     public HoodieDynamoDBIndexConfig.Builder dynamodbTableName(String tableName) {
       dynamoDBIndexConfig.setValue(DYNAMODB_INDEX_TABLE_NAME, tableName);
-      return this;
-    }
-
-    public HoodieDynamoDBIndexConfig.Builder dynamoDBIndexPartitionKey(String partitionKey) {
-      dynamoDBIndexConfig.setValue(DYNAMODB_INDEX_PARTITION_KEY, partitionKey);
       return this;
     }
 

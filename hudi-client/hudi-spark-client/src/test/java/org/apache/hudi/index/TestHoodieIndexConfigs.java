@@ -29,6 +29,8 @@ import org.apache.hudi.index.bloom.HoodieBloomIndex;
 import org.apache.hudi.index.bloom.HoodieGlobalBloomIndex;
 import org.apache.hudi.index.bucket.HoodieSimpleBucketIndex;
 import org.apache.hudi.index.bucket.HoodieSparkConsistentBucketIndex;
+import org.apache.hudi.index.dynamodb.SparkHoodieGlobalDynamoDBIndex;
+import org.apache.hudi.index.dynamodb.SparkHoodieNonGlobalDynamoDBIndex;
 import org.apache.hudi.index.hbase.SparkHoodieHBaseIndex;
 import org.apache.hudi.index.inmemory.HoodieInMemoryHashIndex;
 import org.apache.hudi.index.simple.HoodieSimpleIndex;
@@ -55,7 +57,7 @@ public class TestHoodieIndexConfigs {
   }
 
   @ParameterizedTest
-  @EnumSource(value = IndexType.class, names = {"BLOOM", "GLOBAL_BLOOM", "SIMPLE", "GLOBAL_SIMPLE", "HBASE", "BUCKET", "DYNAMODB"})
+  @EnumSource(value = IndexType.class, names = {"BLOOM", "GLOBAL_BLOOM", "SIMPLE", "GLOBAL_SIMPLE", "HBASE", "BUCKET", "DYNAMODB", "GLOBAL_DYNAMODB"})
   public void testCreateIndex(IndexType indexType) {
     HoodieWriteConfig config;
     HoodieWriteConfig.Builder clientConfigBuilder = HoodieWriteConfig.newBuilder();
@@ -105,7 +107,14 @@ public class TestHoodieIndexConfigs {
             .withIndexConfig(indexConfigBuilder.withIndexType(HoodieIndex.IndexType.DYNAMODB)
                 .withDynamoDBIndexConfig(new HoodieDynamoDBIndexConfig.Builder().build()).build())
             .build();
-        assertTrue(SparkHoodieIndexFactory.createIndex(config) instanceof SparkHoodieHBaseIndex);
+        assertTrue(SparkHoodieIndexFactory.createIndex(config) instanceof SparkHoodieNonGlobalDynamoDBIndex);
+        break;
+      case GLOBAL_DYNAMODB:
+        config = clientConfigBuilder.withPath(basePath)
+            .withIndexConfig(indexConfigBuilder.withIndexType(HoodieIndex.IndexType.GLOBAL_DYNAMODB)
+                .withDynamoDBIndexConfig(new HoodieDynamoDBIndexConfig.Builder().build()).build())
+            .build();
+        assertTrue(SparkHoodieIndexFactory.createIndex(config) instanceof SparkHoodieGlobalDynamoDBIndex);
         break;
       default:
         // no -op. just for checkstyle errors

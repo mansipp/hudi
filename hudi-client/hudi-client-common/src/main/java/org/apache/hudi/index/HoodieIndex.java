@@ -141,7 +141,7 @@ public abstract class HoodieIndex<I, O> implements Serializable {
   }
 
   public enum IndexType {
-    DYNAMODB, HBASE, INMEMORY, BLOOM, GLOBAL_BLOOM, SIMPLE, GLOBAL_SIMPLE, BUCKET, FLINK_STATE
+    DYNAMODB, GLOBAL_DYNAMODB, HBASE, INMEMORY, BLOOM, GLOBAL_BLOOM, SIMPLE, GLOBAL_SIMPLE, BUCKET, FLINK_STATE
   }
 
   public enum BucketIndexEngineType {
