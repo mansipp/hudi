@@ -18,6 +18,22 @@
 
 package org.apache.hudi.index.dynamodb;
 
+import org.apache.hudi.aws.credentials.HoodieAWSCredentialsProviderFactory;
+import org.apache.hudi.client.SparkRDDWriteClient;
+import org.apache.hudi.client.functional.TestHoodieMetadataBase;
+import org.apache.hudi.common.model.HoodieRecord;
+import org.apache.hudi.common.model.HoodieTableType;
+import org.apache.hudi.common.table.HoodieTableMetaClient;
+import org.apache.hudi.common.testutils.HoodieTestDataGenerator;
+import org.apache.hudi.config.HoodieCompactionConfig;
+import org.apache.hudi.config.HoodieDynamoDBIndexConfig;
+import org.apache.hudi.config.HoodieIndexConfig;
+import org.apache.hudi.config.HoodieStorageConfig;
+import org.apache.hudi.config.HoodieWriteConfig;
+import org.apache.hudi.index.HoodieIndex;
+import org.apache.hudi.table.HoodieSparkTable;
+import org.apache.hudi.table.HoodieTable;
+
 import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.regions.RegionUtils;
 import com.amazonaws.services.dynamodbv2.AmazonDynamoDB;
@@ -26,24 +42,19 @@ import com.amazonaws.services.dynamodbv2.model.BillingMode;
 import com.amazonaws.services.dynamodbv2.model.DescribeTableRequest;
 import com.amazonaws.services.dynamodbv2.model.DescribeTableResult;
 import com.amazonaws.services.dynamodbv2.model.TableStatus;
-
-import org.apache.hudi.aws.credentials.HoodieAWSCredentialsProviderFactory;
-import org.apache.hudi.client.functional.TestHoodieMetadataBase;
-import org.apache.hudi.common.testutils.HoodieTestDataGenerator;
-import org.apache.hudi.config.HoodieCompactionConfig;
-import org.apache.hudi.config.HoodieDynamoDBIndexConfig;
-import org.apache.hudi.config.HoodieIndexConfig;
-import org.apache.hudi.config.HoodieStorageConfig;
-import org.apache.hudi.config.HoodieWriteConfig;
-import org.apache.hudi.index.HoodieIndex;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
+import org.apache.spark.api.java.JavaRDD;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class TestSparkHoodieDynamoDBIndex extends  TestHoodieMetadataBase {
@@ -65,15 +76,15 @@ public class TestSparkHoodieDynamoDBIndex extends  TestHoodieMetadataBase {
     initPath();
     initFileSystem();
     initMetaClient();
+    dataGen = new HoodieTestDataGenerator();
   }
 
   @Test
   public void testCreateTable() {
-    LOG.info("Create table call");
     HoodieWriteConfig hoodieWriteConfig = getConfig();
     dynamoDB = getDynamoDBClient(hoodieWriteConfig);
     SparkHoodieDynamoDBIndex sparkHoodieDynamoDBIndex = new SparkHoodieDynamoDBIndex(hoodieWriteConfig);
-    final DescribeTableResult result = dynamoDB.describeTable(new DescribeTableRequest().withTableName(hoodieWriteConfig.getDynamoDBTableName()));
+    final DescribeTableResult result = dynamoDB.describeTable(new DescribeTableRequest().withTableName(hoodieWriteConfig.getDynamoDBIndexTableName()));
     assertTrue(availableStatuses.contains(TableStatus.fromValue(result.getTable().getTableStatus())));
   }
 
@@ -90,6 +101,28 @@ public class TestSparkHoodieDynamoDBIndex extends  TestHoodieMetadataBase {
             .build();
   }
 
+  @ParameterizedTest
+  @EnumSource(HoodieTableType.class)
+  public void testSimpleTagLocation(HoodieTableType tableType) throws Exception {
+
+    final String newCommitTime = "001";
+    final int numRecords = 200;
+    List<HoodieRecord> records = dataGen.generateInserts(newCommitTime, numRecords);
+    JavaRDD<HoodieRecord> writeRecords = jsc.parallelize(records, 1);
+
+    // Load to memory
+    HoodieWriteConfig config = getConfig();
+    SparkHoodieDynamoDBIndex index = new SparkHoodieDynamoDBIndex(config);
+    try (SparkRDDWriteClient writeClient = getHoodieWriteClient(config);) {
+      metaClient = HoodieTableMetaClient.reload(metaClient);
+      HoodieTable hoodieTable = HoodieSparkTable.create(config, context, metaClient);
+
+      // Test tagLocation without any entries in index
+      JavaRDD<HoodieRecord> records1 = tagLocation(index, writeRecords, hoodieTable);
+      assertEquals(0, records1.filter(record -> record.isCurrentLocationKnown()).count());
+    }
+  }
+
   private HoodieWriteConfig getConfig() {
     return getConfigBuilder(false, false).build();
   }
@@ -104,7 +137,7 @@ public class TestSparkHoodieDynamoDBIndex extends  TestHoodieMetadataBase {
         .forTable("test-trip-table")
         .withIndexConfig(HoodieIndexConfig.newBuilder().withIndexType(HoodieIndex.IndexType.DYNAMODB)
             .withDynamoDBIndexConfig(new HoodieDynamoDBIndexConfig.Builder()
-                .dynamodbTableName("hudi_index_test3")
+                .dynamodbTableName("hudi_index_test")
                 .dynamoDBIndexPartitionKey("recordKey")
                 .dynamoDBIndexBillingMode(BillingMode.PAY_PER_REQUEST.name())
                 .dynamoDBIndexReadCapacity("0")
