@@ -20,8 +20,10 @@ package org.apache.hudi.index.dynamodb;
 
 import org.apache.hudi.aws.credentials.HoodieAWSCredentialsProviderFactory;
 import org.apache.hudi.client.WriteStatus;
+import org.apache.hudi.client.utils.SparkMemoryUtils;
 import org.apache.hudi.common.data.HoodieData;
 import org.apache.hudi.common.engine.HoodieEngineContext;
+import org.apache.hudi.common.model.EmptyHoodieRecordPayload;
 import org.apache.hudi.common.model.HoodieAvroRecord;
 import org.apache.hudi.common.model.HoodieKey;
 import org.apache.hudi.common.model.HoodieRecord;
@@ -29,6 +31,7 @@ import org.apache.hudi.common.model.HoodieRecordLocation;
 import org.apache.hudi.common.model.HoodieRecordPayload;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
 import org.apache.hudi.common.table.timeline.HoodieTimeline;
+import org.apache.hudi.common.util.Option;
 import org.apache.hudi.common.util.ValidationUtils;
 import org.apache.hudi.config.HoodieDynamoDBIndexConfig;
 import org.apache.hudi.config.HoodieWriteConfig;
@@ -57,9 +60,14 @@ import com.amazonaws.services.dynamodbv2.model.TableStatus;
 import com.amazonaws.services.dynamodbv2.util.TableUtils;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
+import org.apache.spark.Partitioner;
+import org.apache.spark.api.java.JavaPairRDD;
+import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.function.Function2;
+import org.joda.time.DateTime;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
@@ -67,14 +75,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import scala.Tuple2;
+
 public class SparkHoodieDynamoDBIndex extends HoodieIndex<Object, Object> {
   private static Set<TableStatus> availableStatuses;
-
   private static final Logger LOG = LogManager.getLogger(SparkHoodieDynamoDBIndex.class);
   private static AmazonDynamoDB dynamoDB;
   private static DynamoDB ddb;
   private String tableName;
   private String dynamoDBPartitionKey;
+  private long totalNumInserts;
+  private int numWriteStatusWithInserts;
 
   static {
     availableStatuses = new HashSet<>();
@@ -148,17 +159,30 @@ public class SparkHoodieDynamoDBIndex extends HoodieIndex<Object, Object> {
               String partitionPath = sp.getDynamoPartitionPath();
               if (!checkIfValidCommit(metaClient, commitTs)) {
                 // if commit is invalid, treat this as a new taggedRecord
-                // LOG.info("if commit is invalid, treat this as a new taggedRecord");
                 taggedRecords.add(currentRecord);
                 continue;
               }
-              currentRecord = new HoodieAvroRecord(new HoodieKey(currentRecord.getRecordKey(), partitionPath),
-                  (HoodieRecordPayload) currentRecord.getData());
-              currentRecord.unseal();
-              currentRecord.setCurrentLocation(new HoodieRecordLocation(commitTs, fileId));
-              currentRecord.seal();
-              taggedRecords.add(currentRecord);
-              assert (currentRecord.getRecordKey().contentEquals(keyFromResult));
+              if (updatePartitionPath && !partitionPath.equals(currentRecord.getPartitionPath())) {
+                // delete partition old data record
+                HoodieRecord emptyRecord = new HoodieAvroRecord(new HoodieKey(currentRecord.getRecordKey(), partitionPath),
+                    new EmptyHoodieRecordPayload());
+                emptyRecord.unseal();
+                emptyRecord.setCurrentLocation(new HoodieRecordLocation(commitTs, fileId));
+                emptyRecord.seal();
+                // insert partition new data record
+                currentRecord = new HoodieAvroRecord(new HoodieKey(currentRecord.getRecordKey(), currentRecord.getPartitionPath()),
+                    (HoodieRecordPayload) currentRecord.getData());
+                taggedRecords.add(emptyRecord);
+                taggedRecords.add(currentRecord);
+              } else {
+                currentRecord = new HoodieAvroRecord(new HoodieKey(currentRecord.getRecordKey(), partitionPath),
+                    (HoodieRecordPayload) currentRecord.getData());
+                currentRecord.unseal();
+                currentRecord.setCurrentLocation(new HoodieRecordLocation(commitTs, fileId));
+                currentRecord.seal();
+                taggedRecords.add(currentRecord);
+                assert (currentRecord.getRecordKey().contentEquals(keyFromResult));
+              }
             }
           }
           if (!currentBatchOfRecords.isEmpty()) {
@@ -188,9 +212,131 @@ public class SparkHoodieDynamoDBIndex extends HoodieIndex<Object, Object> {
         .mapPartitionsWithIndex(locationTagFunction(hoodieTable.getMetaClient()), true));
   }
 
+  private Function2<Integer, Iterator<WriteStatus>, Iterator<WriteStatus>> locationUpdateFunction() {
+    return (partition, statusIterator) -> {
+
+      List<WriteStatus> writeStatusList = new ArrayList<>();
+      DynamoDBMapper mapper = new DynamoDBMapper(dynamoDB);
+      List<SparkHoodieDynamoDBIndexMapper> mapperPutList = new ArrayList<>();
+      List<SparkHoodieDynamoDBIndexMapper> mapperDeleteList = new ArrayList<>();
+      // Grab the dynamodb connection
+      if (dynamoDB == null) {
+        dynamoDB = getDynamoDBClient();
+        ddb = new DynamoDB(dynamoDB);
+      }
+      final long startTimeForWriteTask = DateTime.now().getMillis();
+      LOG.info("start time of write task for this task: " + startTimeForWriteTask);
+
+      try {
+        while (statusIterator.hasNext()) {
+          WriteStatus writeStatus = statusIterator.next();
+          try {
+            long numOfInserts = writeStatus.getStat().getNumInserts();
+            LOG.info("Num of inserts in this WriteStatus: " + numOfInserts);
+            LOG.info("Total inserts in this job: " + this.totalNumInserts);
+            for (HoodieRecord rec : writeStatus.getWrittenRecords()) {
+              SparkHoodieDynamoDBIndexMapper sparkHoodieDynamoDBIndexMapper = new SparkHoodieDynamoDBIndexMapper();
+              if (!writeStatus.isErrored(rec.getKey())) {
+                Option<HoodieRecordLocation> loc = rec.getNewLocation();
+                if (loc.isPresent()) {
+                  if (rec.getCurrentLocation() != null) {
+                    // This is an update, no need to update index
+                    continue;
+                  }
+                  sparkHoodieDynamoDBIndexMapper.setDynamoRecordKey(rec.getRecordKey());
+                  sparkHoodieDynamoDBIndexMapper.setDynamoPartitionPath(rec.getPartitionPath());
+                  sparkHoodieDynamoDBIndexMapper.setDynamoCommitTs(loc.get().getInstantTime());
+                  sparkHoodieDynamoDBIndexMapper.setDynamoFileId(loc.get().getFileId());
+                  mapperPutList.add(sparkHoodieDynamoDBIndexMapper);
+                } else {
+                  sparkHoodieDynamoDBIndexMapper.setDynamoRecordKey(rec.getRecordKey());
+                  mapperDeleteList.add(sparkHoodieDynamoDBIndexMapper);
+                }
+              }
+            }
+          } catch (Exception e) {
+            Exception ue = new Exception("Error updating index for " + writeStatus, e);
+            LOG.error(ue);
+            writeStatus.setGlobalError(ue);
+          }
+          writeStatusList.add(writeStatus);
+        }
+        mapper.batchWrite(mapperPutList,mapperDeleteList);
+        final long endWriteTime = DateTime.now().getMillis();
+        LOG.info("dynamodb write task time for this task: " + (endWriteTime - startTimeForWriteTask));
+      } catch (Exception e) {
+        throw new HoodieIndexException("Failed to Update Index locations because of exception with DynamoDB Client", e);
+      }
+      return writeStatusList.iterator();
+    };
+  }
+
+  Map<String, Integer> mapFileWithInsertsToUniquePartition(JavaRDD<WriteStatus> writeStatusRDD) {
+    final Map<String, Integer> fileIdPartitionMap = new HashMap<>();
+    int partitionIndex = 0;
+    // Map each fileId that has inserts to a unique partition Id. This will be used while
+    // repartitioning RDD<WriteStatus>
+    final List<String> fileIds = writeStatusRDD.filter(w -> w.getStat().getNumInserts() > 0)
+        .map(w -> w.getFileId()).collect();
+    for (final String fileId : fileIds) {
+      fileIdPartitionMap.put(fileId, partitionIndex++);
+    }
+    return fileIdPartitionMap;
+  }
+
   @Override
-  public HoodieData<WriteStatus> updateLocation(HoodieData<WriteStatus> writeStatuses, HoodieEngineContext context, HoodieTable hoodieTable) throws HoodieIndexException {
-    return null;
+  public HoodieData<WriteStatus> updateLocation(HoodieData<WriteStatus> writeStatus, HoodieEngineContext context, HoodieTable hoodieTable) throws HoodieIndexException {
+    LOG.info("Update Location call");
+    JavaRDD<WriteStatus> writeStatusRDD = HoodieJavaRDD.getJavaRDD(writeStatus);
+    final JavaPairRDD<Long, Integer> insertOnlyWriteStatusRDD = writeStatusRDD
+        .filter(w -> w.getStat().getNumInserts() > 0).mapToPair(w -> new Tuple2<>(w.getStat().getNumInserts(), 1));
+    final Tuple2<Long, Integer> numPutsParallelismTuple = insertOnlyWriteStatusRDD.fold(new Tuple2<>(0L, 0), (w, c) -> new Tuple2<>(w._1 + c._1, w._2 + c._2));
+    this.totalNumInserts = numPutsParallelismTuple._1;
+    this.numWriteStatusWithInserts = numPutsParallelismTuple._2;
+    final Map<String, Integer> fileIdPartitionMap = mapFileWithInsertsToUniquePartition(writeStatusRDD);
+    JavaRDD<WriteStatus> partitionedRDD = this.numWriteStatusWithInserts == 0 ? writeStatusRDD :
+        writeStatusRDD.mapToPair(w -> new Tuple2<>(w.getFileId(), w))
+            .partitionBy(new SparkHoodieDynamoDBIndex.WriteStatusPartitioner(fileIdPartitionMap,
+                this.numWriteStatusWithInserts))
+            .map(w -> w._2());
+    JavaRDD<WriteStatus> writeStatusJavaRDD = partitionedRDD.mapPartitionsWithIndex(locationUpdateFunction(),
+        true);
+    writeStatusJavaRDD = writeStatusJavaRDD.persist(SparkMemoryUtils.getWriteStatusStorageLevel(config.getProps()));
+    writeStatusJavaRDD.count();
+    return HoodieJavaRDD.of(writeStatusJavaRDD);
+  }
+
+  /**
+   * Partitions each WriteStatus with inserts into a unique single partition. WriteStatus without inserts will be
+   * assigned to random partitions. This partitioner will be useful to utilize max parallelism with spark operations
+   * that are based on inserts in each WriteStatus.
+   */
+  public static class WriteStatusPartitioner extends Partitioner {
+    private int totalPartitions;
+    final Map<String, Integer> fileIdPartitionMap;
+
+    public WriteStatusPartitioner(final Map<String, Integer> fileIdPartitionMap, final int totalPartitions) {
+      this.totalPartitions = totalPartitions;
+      this.fileIdPartitionMap = fileIdPartitionMap;
+    }
+
+    @Override
+    public int numPartitions() {
+      return this.totalPartitions;
+    }
+
+    @Override
+    public int getPartition(Object key) {
+      final String fileId = (String) key;
+      if (!fileIdPartitionMap.containsKey(fileId)) {
+        LOG.info("This writestatus(fileId: " + fileId + ") is not mapped because it doesn't have any inserts. "
+            + "In this case, we can assign a random partition to this WriteStatus.");
+        // Assign random spark partition for the `WriteStatus` that has no inserts. For a spark operation that depends
+        // on number of inserts, there won't be any performance penalty in packing these WriteStatus'es together.
+        return Math.abs(fileId.hashCode()) % totalPartitions;
+      }
+      return fileIdPartitionMap.get(fileId);
+    }
   }
 
   @Override
@@ -247,7 +393,7 @@ public class SparkHoodieDynamoDBIndex extends HoodieIndex<Object, Object> {
   }
 
   public void createTableInDynamoDB(AmazonDynamoDB dynamoDB, HoodieWriteConfig hoodieWriteConfig) {
-    // LOG.info("Create table in DynamoDB for Hudi index");
+    LOG.info("Create table in DynamoDB for Hudi index");
 
     if (dynamoDB == null) {
       dynamoDB = getDynamoDBClient();
@@ -290,6 +436,6 @@ public class SparkHoodieDynamoDBIndex extends HoodieIndex<Object, Object> {
     } catch (InterruptedException e) {
       throw new HoodieIndexException("Thread interrupted while waiting for dynamoDB table to turn active", e);
     }
-    // LOG.info("Table Description:  \n" + dynamoDB.describeTable(tableName));
+    LOG.info("Table Description:  \n" + dynamoDB.describeTable(tableName));
   }
 }
