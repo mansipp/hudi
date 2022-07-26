@@ -52,7 +52,6 @@ import static org.apache.hudi.index.HoodieIndex.IndexType.HBASE;
 import static org.apache.hudi.index.HoodieIndex.IndexType.INMEMORY;
 import static org.apache.hudi.index.HoodieIndex.IndexType.SIMPLE;
 
-
 /**
  * Indexing related config.
  */
