@@ -29,10 +29,9 @@ import org.apache.hudi.common.util.Option;
 import org.apache.hudi.config.HoodieWriteConfig;
 import org.apache.hudi.exception.HoodieIndexException;
 
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDB;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBAsync;
 import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBMapper;
 import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBMapperConfig;
-import com.amazonaws.services.dynamodbv2.document.DynamoDB;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 import org.apache.spark.api.java.function.Function2;
@@ -46,15 +45,13 @@ import java.util.Map;
 
 public class SparkHoodieNonGlobalDynamoDBIndex extends SparkHoodieDynamoDBIndex {
   private static final Logger LOG = LogManager.getLogger(SparkHoodieNonGlobalDynamoDBIndex.class);
-  private static AmazonDynamoDB dynamoDB;
-  private static DynamoDB ddb;
+  private static AmazonDynamoDBAsync dynamoDB;
   private Integer batchSize = 100;
 
   public SparkHoodieNonGlobalDynamoDBIndex(HoodieWriteConfig hoodieWriteConfig) {
     super(hoodieWriteConfig);
     if (this.dynamoDB == null) {
       this.dynamoDB = getDynamoDBClient();
-      this.ddb = new DynamoDB(dynamoDB);
     }
     if (!indexTableExists(dynamoDB)) {
       LOG.info("Table " + tableName + " does not exist in DynamoDB, initiating create table for " + tableName);
@@ -68,7 +65,6 @@ public class SparkHoodieNonGlobalDynamoDBIndex extends SparkHoodieDynamoDBIndex 
       // grab DynamoDB connection
       if (this.dynamoDB == null) {
         this.dynamoDB = getDynamoDBClient();
-        this.ddb = new DynamoDB(dynamoDB);
       }
       List<HoodieRecord<R>> taggedRecords = new ArrayList<>();
       DynamoDBMapperConfig mapperConfig = DynamoDBMapperConfig.builder()
@@ -138,7 +134,6 @@ public class SparkHoodieNonGlobalDynamoDBIndex extends SparkHoodieDynamoDBIndex 
       // Grab the dynamodb connection
       if (dynamoDB == null) {
         dynamoDB = getDynamoDBClient();
-        ddb = new DynamoDB(dynamoDB);
       }
       List<WriteStatus> writeStatusList = new ArrayList<>();
       DynamoDBMapperConfig mapperConfig = DynamoDBMapperConfig.builder()

@@ -40,8 +40,8 @@ import org.apache.hudi.table.HoodieTable;
 
 import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.regions.RegionUtils;
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDB;
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBAsync;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBAsyncClientBuilder;
 import com.amazonaws.services.dynamodbv2.model.BillingMode;
 import com.amazonaws.services.dynamodbv2.model.DescribeTableRequest;
 import com.amazonaws.services.dynamodbv2.model.DescribeTableResult;
@@ -64,7 +64,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class TestSparkHoodieGlobalDynamoDBIndex extends TestHoodieMetadataBase {
   public static final Logger LOG = LogManager.getLogger(TestSparkHoodieGlobalDynamoDBIndex.class);
   private HoodieTestDataGenerator dataGen;
-  private static AmazonDynamoDB dynamoDB;
+  private static AmazonDynamoDBAsync dynamoDB;
   private static Set<TableStatus> availableStatuses;
 
   static {
@@ -91,14 +91,14 @@ public class TestSparkHoodieGlobalDynamoDBIndex extends TestHoodieMetadataBase {
     assertTrue(availableStatuses.contains(TableStatus.fromValue(result.getTable().getTableStatus())));
   }
 
-  private AmazonDynamoDB getDynamoDBClient(HoodieWriteConfig config) {
+  private AmazonDynamoDBAsync getDynamoDBClient(HoodieWriteConfig config) {
     String region = config.getProps().getString(HoodieDynamoDBIndexConfig.DYNAMODB_INDEX_REGION.key());
     String endpointURL = config.getProps().containsKey(HoodieDynamoDBIndexConfig.DYNAMODB_ENDPOINT_URL.key())
             ? config.getProps().getString(HoodieDynamoDBIndexConfig.DYNAMODB_ENDPOINT_URL.key())
-            : RegionUtils.getRegion(region).getServiceEndpoint(AmazonDynamoDB.ENDPOINT_PREFIX);
+            : RegionUtils.getRegion(region).getServiceEndpoint(AmazonDynamoDBAsync.ENDPOINT_PREFIX);
     AwsClientBuilder.EndpointConfiguration dynamodbEndpoint =
             new AwsClientBuilder.EndpointConfiguration(endpointURL, region);
-    return AmazonDynamoDBClientBuilder.standard()
+    return AmazonDynamoDBAsyncClientBuilder.standard()
             .withEndpointConfiguration(dynamodbEndpoint)
             .withCredentials(HoodieAWSCredentialsProviderFactory.getAwsCredentialsProvider(config.getProps()))
             .build();
@@ -128,7 +128,7 @@ public class TestSparkHoodieGlobalDynamoDBIndex extends TestHoodieMetadataBase {
   @Test
   public void testSimpleTagLocationAndUpdate() throws Exception {
     final String newCommitTime = "001";
-    final int numRecords = 20;
+    final int numRecords = 1000;
     List<HoodieRecord> records = dataGen.generateInserts(newCommitTime, numRecords);
     JavaRDD<HoodieRecord> writeRecords = jsc.parallelize(records, 1);
 
@@ -247,7 +247,7 @@ public class TestSparkHoodieGlobalDynamoDBIndex extends TestHoodieMetadataBase {
         .forTable("test-trip-table")
         .withIndexConfig(HoodieIndexConfig.newBuilder().withIndexType(HoodieIndex.IndexType.GLOBAL_DYNAMODB)
             .withDynamoDBIndexConfig(new HoodieDynamoDBIndexConfig.Builder()
-                .dynamodbTableName("hudi_index_test")
+                .dynamodbTableName("hudi_async_index_test")
                 .dynamoDBIndexPartitionKey("recordKey")
                 .dynamoDBIndexBillingMode(BillingMode.PAY_PER_REQUEST.name())
                 .dynamoDBIndexReadCapacity("0")

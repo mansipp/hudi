@@ -27,34 +27,42 @@ import org.apache.hudi.common.model.HoodieRecordLocation;
 import org.apache.hudi.common.model.HoodieRecordPayload;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
 import org.apache.hudi.common.util.Option;
-import org.apache.hudi.common.util.RateLimiter;
 import org.apache.hudi.config.HoodieWriteConfig;
 import org.apache.hudi.exception.HoodieIndexException;
 
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDB;
-import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBMapper;
-import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBMapperConfig;
-import com.amazonaws.services.dynamodbv2.document.DynamoDB;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBAsync;
+import com.amazonaws.services.dynamodbv2.model.AttributeValue;
+import com.amazonaws.services.dynamodbv2.model.BatchGetItemResult;
+import com.amazonaws.services.dynamodbv2.model.BatchWriteItemResult;
+import com.amazonaws.services.dynamodbv2.model.KeysAndAttributes;
+import com.amazonaws.services.dynamodbv2.model.PutRequest;
 import com.amazonaws.services.dynamodbv2.model.TableStatus;
+import com.amazonaws.services.dynamodbv2.model.WriteRequest;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 import org.apache.spark.api.java.function.Function2;
 import org.joda.time.DateTime;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 public class SparkHoodieGlobalDynamoDBIndex extends SparkHoodieDynamoDBIndex {
   private static Set<TableStatus> availableStatuses;
   private static final Logger LOG = LogManager.getLogger(SparkHoodieGlobalDynamoDBIndex.class);
-  private static AmazonDynamoDB dynamoDB;
-  private static DynamoDB ddb;
+  private static AmazonDynamoDBAsync dynamoDB;
+  private static String ddbRecordKey = "recordKey";
+  private static String ddbPartitionPath = "partitionPath";
+  private static String ddbFileId = "fileId";
+  private static String ddbCommitTs = "commitTs";
+  private static List<Future<BatchWriteItemResult>> writeItemFuture = new ArrayList<>();
 
   static {
     availableStatuses = new HashSet<>();
@@ -66,7 +74,6 @@ public class SparkHoodieGlobalDynamoDBIndex extends SparkHoodieDynamoDBIndex {
     super(hoodieWriteConfig);
     if (this.dynamoDB == null) {
       this.dynamoDB = getDynamoDBClient();
-      this.ddb = new DynamoDB(dynamoDB);
     }
     if (!indexTableExists(dynamoDB)) {
       LOG.info("Table " + tableName + " does not exist in DynamoDB, initiating create table for " + tableName);
@@ -78,54 +85,56 @@ public class SparkHoodieGlobalDynamoDBIndex extends SparkHoodieDynamoDBIndex {
       HoodieTableMetaClient metaClient) {
     return (partitionNum, hoodieRecordIterator) -> {
       boolean updatePartitionPath = config.getDynamoDBIndexUpdatePartitionPath();
-      RateLimiter limiter = RateLimiter.create(batchSize * 10, TimeUnit.SECONDS);
 
       // grab DynamoDB connection
       if (this.dynamoDB == null) {
         this.dynamoDB = getDynamoDBClient();
-        this.ddb = new DynamoDB(dynamoDB);
       }
 
       List<HoodieRecord<R>> taggedRecords = new ArrayList<>();
-      DynamoDBMapperConfig mapperConfig = DynamoDBMapperConfig.builder()
-          .withConsistentReads(DynamoDBMapperConfig.ConsistentReads.CONSISTENT)
-          .withTableNameOverride(DynamoDBMapperConfig.TableNameOverride.withTableNameReplacement(tableName))
-          .build();
-      DynamoDBMapper mapper = new DynamoDBMapper(dynamoDB, mapperConfig);
-      List<Object> itemsToGet = new ArrayList<>();
-
+      List<Map<String, AttributeValue>> itemsToGet = new ArrayList<>();
+      List<Future<BatchGetItemResult>> getItemFuture = new ArrayList<>();
       try {
         List<HoodieRecord> currentBatchOfRecords = new LinkedList<>();
         // Do the tagging.
         while (hoodieRecordIterator.hasNext()) {
+          Map<String, KeysAndAttributes> keysAndAttributes = new HashMap<>();
           HoodieRecord rec = hoodieRecordIterator.next();
-          SparkHoodieDynamoDBIndexMapper sparkHoodieDynamoDBIndexMapper = new SparkHoodieDynamoDBIndexMapper();
-          sparkHoodieDynamoDBIndexMapper.setDynamoRecordKey(rec.getRecordKey());
-          itemsToGet.add(sparkHoodieDynamoDBIndexMapper);
           currentBatchOfRecords.add(rec);
+          Map<String, AttributeValue> key = new HashMap<>();
+          key.put(dynamoDBPartitionKey, new AttributeValue().withS(rec.getRecordKey()));
+          itemsToGet.add(key);
           if (hoodieRecordIterator.hasNext() && itemsToGet.size() < batchSize) {
             continue;
           }
-          limiter.tryAcquire(itemsToGet.size());
-          Map<String, List<Object>> items = mapper.batchLoad(itemsToGet);
+          keysAndAttributes.put(tableName, new KeysAndAttributes().withKeys(itemsToGet));
+          getItemFuture.add(dynamoDB.batchGetItemAsync(keysAndAttributes));
           itemsToGet.clear();
-          if (items.get(tableName).isEmpty()) {
-            currentBatchOfRecords.stream().forEach(i -> taggedRecords.add(i));
-            currentBatchOfRecords.clear();
+        }
+        if (getItemFuture.isEmpty()) {
+          currentBatchOfRecords.stream().forEach(i -> taggedRecords.add(i));
+          currentBatchOfRecords.clear();
+          return taggedRecords.iterator();
+        }
+        for (Future<BatchGetItemResult> result : getItemFuture) {
+          BatchGetItemResult responses = result.get(10,TimeUnit.SECONDS);
+          if (responses.getResponses().get(tableName).size() == 0) {
             continue;
           }
-          List<Object> item = items.get(tableName);
-          int itemSize = item.size();
-          for (int i = 0; i < itemSize; i++) {
-            SparkHoodieDynamoDBIndexMapper sp = (SparkHoodieDynamoDBIndexMapper) item.remove(0);
-            HoodieRecord currentRecord = currentBatchOfRecords.stream().filter(x -> x.getRecordKey().equals(sp.getDynamoRecordKey())).reduce((a, b) -> {
-              throw new RuntimeException("Record not found");
-            }).get();
-            currentBatchOfRecords.removeIf(x -> x.getRecordKey().equals(sp.getDynamoRecordKey()));
-            String keyFromResult = sp.getDynamoRecordKey();
-            String commitTs = sp.getDynamoCommitTs();
-            String fileId = sp.getDynamoFileId();
-            String partitionPath = sp.getDynamoPartitionPath();
+          List<Map<String, AttributeValue>> items = responses.getResponses().get(tableName);
+          for (Map<String, AttributeValue> item : items) {
+            if (item.isEmpty()) {
+              continue;
+            }
+            HoodieRecord currentRecord = currentBatchOfRecords.stream()
+                .filter(x -> x.getRecordKey().equals(item.get(ddbRecordKey).getS())).reduce((a, b) -> {
+                  throw new RuntimeException("Record not found");
+                }).get();
+            currentBatchOfRecords.removeIf(x -> x.getRecordKey().equals(item.get(ddbRecordKey).getS()));
+            String keyFromResult = item.get(ddbRecordKey).getS();
+            String commitTs = item.get(ddbCommitTs).getS();
+            String fileId = item.get(ddbFileId).getS();
+            String partitionPath = item.get(ddbPartitionPath).getS();
             if (!checkIfValidCommit(metaClient, commitTs)) {
               // if commit is invalid, treat this as a new taggedRecord
               taggedRecords.add(currentRecord);
@@ -154,6 +163,10 @@ public class SparkHoodieGlobalDynamoDBIndex extends SparkHoodieDynamoDBIndex {
             }
           }
         }
+        if (!currentBatchOfRecords.isEmpty()) {
+          currentBatchOfRecords.stream().forEach(i -> taggedRecords.add(i));
+          currentBatchOfRecords.clear();
+        }
       } catch (HoodieIndexException e) {
         throw new HoodieIndexException("Failed to Tag indexed locations because of exception with DynamoDB Client", e);
       }
@@ -166,31 +179,21 @@ public class SparkHoodieGlobalDynamoDBIndex extends SparkHoodieDynamoDBIndex {
       // Grab the dynamodb connection
       if (dynamoDB == null) {
         dynamoDB = getDynamoDBClient();
-        ddb = new DynamoDB(dynamoDB);
       }
 
       List<WriteStatus> writeStatusList = new ArrayList<>();
-      DynamoDBMapperConfig mapperConfig = DynamoDBMapperConfig.builder()
-          .withConsistentReads(DynamoDBMapperConfig.ConsistentReads.CONSISTENT)
-          .withTableNameOverride(DynamoDBMapperConfig.TableNameOverride.withTableNameReplacement(tableName))
-          .build();
-      DynamoDBMapper mapper = new DynamoDBMapper(dynamoDB, mapperConfig);
-
       final long startTimeForWriteTask = DateTime.now().getMillis();
       LOG.info("start time of write task for this task: " + startTimeForWriteTask);
 
       try {
-        final RateLimiter limiter = RateLimiter.create(batchSize * 10, TimeUnit.SECONDS);
         while (statusIterator.hasNext()) {
           WriteStatus writeStatus = statusIterator.next();
           try {
-            List<SparkHoodieDynamoDBIndexMapper> mapperPutList = new ArrayList<>();
-            List<SparkHoodieDynamoDBIndexMapper> mapperDeleteList = new ArrayList<>();
+            List<WriteRequest> writeRequests = new ArrayList<>();
             long numOfInserts = writeStatus.getStat().getNumInserts();
             LOG.info("Num of inserts in this WriteStatus: " + numOfInserts);
             LOG.info("Total inserts in this job: " + this.totalNumInserts);
             for (HoodieRecord rec : writeStatus.getWrittenRecords()) {
-              SparkHoodieDynamoDBIndexMapper sparkHoodieDynamoDBIndexMapper = new SparkHoodieDynamoDBIndexMapper();
               if (!writeStatus.isErrored(rec.getKey())) {
                 Option<HoodieRecordLocation> loc = rec.getNewLocation();
                 if (loc.isPresent()) {
@@ -198,28 +201,29 @@ public class SparkHoodieGlobalDynamoDBIndex extends SparkHoodieDynamoDBIndex {
                     // This is an update, no need to update index
                     continue;
                   }
-                  sparkHoodieDynamoDBIndexMapper.setDynamoRecordKey(rec.getRecordKey());
-                  sparkHoodieDynamoDBIndexMapper.setDynamoPartitionPath(rec.getPartitionPath());
-                  sparkHoodieDynamoDBIndexMapper.setDynamoCommitTs(loc.get().getInstantTime());
-                  sparkHoodieDynamoDBIndexMapper.setDynamoFileId(loc.get().getFileId());
-                  mapperPutList.add(sparkHoodieDynamoDBIndexMapper);
-                } else {
-                  sparkHoodieDynamoDBIndexMapper.setDynamoRecordKey(rec.getRecordKey());
-                  mapperDeleteList.add(sparkHoodieDynamoDBIndexMapper);
+                  Map<String, AttributeValue> attributes = new HashMap<>();
+                  attributes.put(ddbRecordKey, new AttributeValue().withS(rec.getRecordKey()));
+                  attributes.put(ddbPartitionPath, new AttributeValue().withS(rec.getPartitionPath()));
+                  attributes.put(ddbFileId, new AttributeValue().withS(loc.get().getFileId()));
+                  attributes.put(ddbCommitTs, new AttributeValue().withS(loc.get().getInstantTime()));
+                  writeRequests.add(new WriteRequest(new PutRequest(attributes)));
                 }
               }
-              if (mapperPutList.size() + mapperDeleteList.size() < batchSize) {
+              if (writeRequests.size() < 24) {
+                // DynamoDB batchWrite operation has a limit of 25 items per batch.
                 continue;
               }
-              limiter.tryAcquire(mapperPutList.size() + mapperDeleteList.size());
-              mapper.batchWrite(mapperPutList, mapperDeleteList);
-              mapperPutList.clear();
-              mapperDeleteList.clear();
+              putWriteRequests(writeRequests);
+              writeRequests = new ArrayList<>();
             }
-            limiter.tryAcquire(mapperPutList.size() + mapperDeleteList.size());
-            mapper.batchWrite(mapperPutList, mapperDeleteList);
-            mapperPutList.clear();
-            mapperDeleteList.clear();
+            putWriteRequests(writeRequests);
+            for (final Future<BatchWriteItemResult> result : writeItemFuture) {
+              try {
+                result.get(10, TimeUnit.SECONDS);
+              } catch (final Exception ex) {
+                LOG.error("The data in this write request haven't executed due to some reason.", ex);
+              }
+            }
           } catch (Exception e) {
             Exception ue = new Exception("Error updating index for " + writeStatus, e);
             LOG.error(ue);
@@ -234,6 +238,12 @@ public class SparkHoodieGlobalDynamoDBIndex extends SparkHoodieDynamoDBIndex {
       }
       return writeStatusList.iterator();
     };
+  }
+
+  private void putWriteRequests(List<WriteRequest> writeItemRequests) {
+    Map<String, List<WriteRequest>> requests = new HashMap<>();
+    requests.put(tableName, writeItemRequests);
+    writeItemFuture.add(dynamoDB.batchWriteItemAsync(requests));
   }
 
   @Override

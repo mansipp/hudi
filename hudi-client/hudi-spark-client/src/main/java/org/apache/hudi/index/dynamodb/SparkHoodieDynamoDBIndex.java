@@ -37,8 +37,8 @@ import org.apache.hudi.table.HoodieTable;
 
 import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.regions.RegionUtils;
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDB;
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBAsync;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBAsyncClientBuilder;
 import com.amazonaws.services.dynamodbv2.model.AttributeDefinition;
 import com.amazonaws.services.dynamodbv2.model.BillingMode;
 import com.amazonaws.services.dynamodbv2.model.CreateTableRequest;
@@ -169,14 +169,14 @@ public class SparkHoodieDynamoDBIndex extends HoodieIndex<Object, Object> {
     return false;
   }
 
-  protected AmazonDynamoDB getDynamoDBClient() {
+  protected AmazonDynamoDBAsync getDynamoDBClient() {
     String region = this.config.getProps().getString(HoodieDynamoDBIndexConfig.DYNAMODB_INDEX_REGION.key());
     String endpointURL = this.config.getProps().containsKey(HoodieDynamoDBIndexConfig.DYNAMODB_ENDPOINT_URL.key())
         ? this.config.getProps().getString(HoodieDynamoDBIndexConfig.DYNAMODB_ENDPOINT_URL.key())
-        : RegionUtils.getRegion(region).getServiceEndpoint(AmazonDynamoDB.ENDPOINT_PREFIX);
+        : RegionUtils.getRegion(region).getServiceEndpoint(AmazonDynamoDBAsync.ENDPOINT_PREFIX);
     AwsClientBuilder.EndpointConfiguration dynamodbEndpoint =
         new AwsClientBuilder.EndpointConfiguration(endpointURL, region);
-    return AmazonDynamoDBClientBuilder.standard()
+    return AmazonDynamoDBAsyncClientBuilder.standard()
         .withEndpointConfiguration(dynamodbEndpoint)
         .withCredentials(HoodieAWSCredentialsProviderFactory.getAwsCredentialsProvider(config.getProps()))
         .build();
@@ -192,7 +192,7 @@ public class SparkHoodieDynamoDBIndex extends HoodieIndex<Object, Object> {
     hoodieWriteConfig.getProps().putIfAbsent(HoodieDynamoDBIndexConfig.DYNAMODB_INDEX_TABLE_CREATION_TIMEOUT.key(), "600000");
   }
 
-  protected boolean indexTableExists(AmazonDynamoDB dynamoDB) {
+  protected boolean indexTableExists(AmazonDynamoDBAsync dynamoDB) {
     try {
       final DescribeTableResult result = dynamoDB.describeTable(new DescribeTableRequest().withTableName(tableName));
       List<KeySchemaElement> keySchemaElementList = result.getTable().getKeySchema();
@@ -206,7 +206,7 @@ public class SparkHoodieDynamoDBIndex extends HoodieIndex<Object, Object> {
     }
   }
 
-  protected void createTableInDynamoDB(AmazonDynamoDB dynamoDB, HoodieWriteConfig hoodieWriteConfig) {
+  protected void createTableInDynamoDB(AmazonDynamoDBAsync dynamoDB, HoodieWriteConfig hoodieWriteConfig) {
     if (dynamoDB == null) {
       dynamoDB = getDynamoDBClient();
     }
