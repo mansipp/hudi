@@ -58,7 +58,6 @@ import java.util.stream.Collectors;
 import scala.Tuple2;
 
 /**
- * TODO: [HUDI-8294]
  * A tool with spark-submit to drop Hudi table partitions.
  *
  * <p>
@@ -66,7 +65,6 @@ import scala.Tuple2;
  * ```
  * spark-submit \
  * --class org.apache.hudi.utilities.HoodieDropPartitionsTool \
- * --packages org.apache.spark:spark-avro_2.11:2.4.4 \
  * --master local[*]
  * --driver-memory 1g \
  * --executor-memory 1g \
@@ -88,7 +86,6 @@ import scala.Tuple2;
  * ```
  * spark-submit \
  * --class org.apache.hudi.utilities.HoodieDropPartitionsTool \
- * --packages org.apache.spark:spark-avro_2.11:2.4.4 \
  * --master local[*]
  * --driver-memory 1g \
  * --executor-memory 1g \
